@@ -22,7 +22,9 @@ on first connect.
 
 - **MCP server wiring** — `@gigabuddy/agent`, the Gigabuddy agent client.
 - **Hooks** — awareness injected into your prompts, an activity nudge after
-  edits, a clean disconnect on session end.
+  edits, a clean disconnect on session end. A Gigabuddy connector added on
+  claude.ai also shows up in Claude Code; its tools are refused in favour of
+  the plugin's, which act as this session's own agent.
 - **Statusline** — your session identity and place at a glance.
 - **Skills** — `/decide`, `/handover`, `/pickup`, `/idea`, `/issue`. Skill
   guidance is served live by the Gigabuddy door, so it improves without plugin

@@ -12,6 +12,15 @@
     ],
     "PreToolUse": [
       {
+        "matcher": "mcp__claude_ai_.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/connector-guard.sh"
+          }
+        ]
+      },
+      {
         "matcher": "*",
         "hooks": [
           {
