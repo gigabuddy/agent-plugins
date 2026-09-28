@@ -95,6 +95,18 @@ if [[ -z $F ]]; then
       T0=""
       printf '%s\n' "$NOW" >"$W" 2>/dev/null || true
     fi
+    # The launcher (launch-agent.mjs) records WHY when no agent could start —
+    # say that instead of guessing. Only a failure from around this session's
+    # start counts; an older one belongs to a session long gone.
+    FT=""
+    FMSG=""
+    if [[ -f $GB_DIR/agent-launch-failure.txt ]]; then
+      { IFS= read -r FT && IFS= read -r FMSG; } <"$GB_DIR/agent-launch-failure.txt" 2>/dev/null
+    fi
+    if [[ $FT == +([0-9]) && -n $FMSG ]] && ((FT >= ${T0:-$NOW} - 120)); then
+      echo "🍄 gigabuddy failed to start: $FMSG"
+      exit 0
+    fi
     if [[ -n $T0 ]] && ((NOW - T0 >= 30)); then
       echo "🍄 gigabuddy isn't starting — restart Claude Code to reload the plugin"
       exit 0

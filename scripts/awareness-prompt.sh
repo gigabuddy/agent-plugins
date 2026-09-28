@@ -99,6 +99,33 @@ has_gigabuddy_credentials() {
 # Read the inbox for THIS session, not a stale one from a dead session.
 INBOX="$SDIR/inbox.json"
 if [ ! -f "$INBOX" ]; then
+  # Not connected because the agent never started: the launcher recorded why
+  # (launch-agent.mjs). Its stand-in server told the agent too, but a nudge to
+  # sign in or `connect` would now be wrong advice. A failure from before this
+  # session began (the statusline's wait stamp, else the last 30 min) belongs to
+  # a session long gone. Once per session.
+  FAIL="$GB_DIR/agent-launch-failure.txt"
+  if [ -f "$FAIL" ]; then
+    FT=""
+    FMSG=""
+    { IFS= read -r FT && IFS= read -r FMSG; } <"$FAIL" 2>/dev/null || true
+    SINCE=$(( $(date +%s) - 1800 ))
+    [ -f "$SDIR/statusline-wait" ] && IFS= read -r SINCE <"$SDIR/statusline-wait" && SINCE=$((SINCE - 120))
+    case "$FT" in
+      '' | *[!0-9]*) FT=0 ;;
+    esac
+    if [ -n "$FMSG" ] && [ "$FT" -ge "$SINCE" ] 2>/dev/null; then
+      NUDGE_FLAG="${TMPDIR:-/tmp}/gigabuddy-launch-nudge-$SESSION_ID"
+      if [ ! -f "$NUDGE_FLAG" ]; then
+        : > "$NUDGE_FLAG" 2>/dev/null || true
+        NUDGE="Gigabuddy's agent failed to start: $FMSG. None of the Gigabuddy tools work this session — tell the user in one line when Gigabuddy comes up; don't call login or connect."
+        ESCAPED=$(printf '%s' "$NUDGE" | jq -Rs . 2>/dev/null) \
+          && printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":%s}}\n' "$ESCAPED"
+      fi
+      exit 0
+    fi
+  fi
+
   # Not connected. Usually the server is just booting — but a user who has
   # never signed in will NEVER connect, and nothing tells them why (the
   # server's stderr hint is invisible in normal use, and the login tool may
@@ -126,18 +153,29 @@ if [ ! -f "$INBOX" ]; then
   if [ -z "$AC_KIND" ]; then
     [ -f "$GB_DIR/default-place.json" ] && AC_KIND="pinned" || AC_KIND="none"
   fi
+  # Which room is the PERSON's call, not the agent's: a "last room used" hint
+  # read as the answer, and an agent joined a room one other session had
+  # wandered into (task:Iy6JadJJ6QOF). List the candidates, never rank them.
   if [ "$AC_KIND" = "none" ] || [ "$AC_KIND" = "ambiguous" ]; then
     NUDGE_FLAG="${TMPDIR:-/tmp}/gigabuddy-connect-nudge-$SESSION_ID"
     if [ ! -f "$NUDGE_FLAG" ]; then
       : > "$NUDGE_FLAG" 2>/dev/null || true
-      KNOWN=$(jq -r '[.places[]? | "\(.placeName // .placeId) (\(.placeId))"] | join(", ")' \
+      # The ambiguous case names the rooms recent sessions split between;
+      # otherwise offer every room this repo has used.
+      CANDIDATES=""
+      if [ "$AC_KIND" = "ambiguous" ]; then
+        CANDIDATES=$(jq -r --slurpfile sp "$GB_DIR/sanctioned-places.json" \
+          '[.placeIds[]? as $id | ($sp[0].places // [] | map(select(.placeId == $id)) | .[0].placeName // $id) + " (" + $id + ")"] | join(", ")' \
+          "$SDIR/autoconnect.json" 2>/dev/null || true)
+      fi
+      [ -z "$CANDIDATES" ] && CANDIDATES=$(jq -r '[.places[]? | "\(.placeName // .placeId) (\(.placeId))"] | join(", ")' \
         "$GB_DIR/sanctioned-places.json" 2>/dev/null || true)
-      LAST=$(jq -r 'if .placeId then "\(.placeName // .placeId) (\(.placeId))" else empty end' \
-        "$GB_DIR/connection.json" 2>/dev/null || true)
-      NUDGE="Gigabuddy: signed in but NOT connected, and this repo has no pinned room, so no auto-join will happen. The work/page/ledger verbs (search, read_work, raise, decide, load_skill, pickup_work, …) only appear once connected."
-      [ -n "$LAST" ] && NUDGE="$NUDGE Last room used here: $LAST."
-      [ -n "$KNOWN" ] && NUDGE="$NUDGE Rooms this repo has used: $KNOWN."
-      NUDGE="$NUDGE Before doing anything that needs those verbs, connect: call the gigabuddy \`connect\` tool with the placeId (add pin: true so future sessions auto-join it — the gigabuddy tools may be deferred; find them via tool search). If the user's request doesn't need Gigabuddy, mention the offline state in one line and carry on. Once per session."
+      [ -z "$CANDIDATES" ] && CANDIDATES=$(jq -r '[.placeIds[]?] | join(", ")' "$SDIR/autoconnect.json" 2>/dev/null || true)
+      NUDGE="Gigabuddy: signed in but NOT connected. This repo has no default room"
+      [ "$AC_KIND" = "ambiguous" ] && NUDGE="$NUDGE and its recent sessions were in different rooms"
+      NUDGE="$NUDGE, so no auto-join happened. The work/page/ledger/inbox verbs (search, read_work, raise, decide, inbox, pickup_work, …) only appear once connected."
+      [ -n "$CANDIDATES" ] && NUDGE="$NUDGE Rooms this repo has used: $CANDIDATES."
+      NUDGE="$NUDGE Before doing anything that needs those verbs, ASK the user which room to join — don't pick one yourself, not even the most recent. Then call the gigabuddy \`connect\` tool with that placeId (the gigabuddy tools may be deferred; find them via tool search); its result says how to offer making that room the repo's default. If the user's request doesn't need Gigabuddy, mention the offline state in one line and carry on. Once per session."
       ESCAPED=$(printf '%s' "$NUDGE" | jq -Rs . 2>/dev/null) \
         && printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":%s}}\n' "$ESCAPED"
     fi

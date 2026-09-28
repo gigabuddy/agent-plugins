@@ -1,8 +1,11 @@
 {
   "mcpServers": {
     "gigabuddy": {
-      "command": "npx",
-      "args": ["-y", "@gigabuddy/agent@latest"],
+      "command": "sh",
+      "args": [
+        "-c",
+        "command -v gigabuddy-agent >/dev/null 2>&1 && exec gigabuddy-agent || exec npx -y --@gigabuddy:registry=https://registry.npmjs.org/ @gigabuddy/agent@latest"
+      ],
       "env": {
         "GIGABUDDY_HARNESS": "codex"
       }

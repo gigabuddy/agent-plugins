@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "agent": {
-      "command": "npx",
-      "args": ["-y", "@gigabuddy/agent@latest"]
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/launch-agent.mjs"]
     }
   }
 }
