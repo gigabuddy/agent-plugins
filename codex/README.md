@@ -36,6 +36,13 @@ first time, it asks you to sign in.
   it checks npm in the background and installs a newer version for the next
   launch (`GIGABUDDY_AGENT_AUTO_UPDATE=0` turns that off).
 
+- **Prompt hook** (`hooks.json`): on every prompt Codex calls the agent's
+  `awareness_hook` tool. On a thread's first prompt it joins the repo's pinned
+  room (the first join takes a few seconds; room tools called meanwhile wait
+  for it). Every later prompt gets the room's awareness: who is live in this
+  repo, the house rules, and recent mentions and asks. With no pinned room it
+  asks you which room to join. Codex asks you to approve the hook once.
+
 - **Skills**: decide, handover, pickup, idea, issue. Their guidance is served
   live by the Gigabuddy door, so it improves without plugin updates.
 
@@ -44,10 +51,6 @@ connected to a room. Codex reads its tool list once, at startup, so the agent
 lists the last menu it saw and refreshes it in the background. `gigabuddy setup
 codex` loads that menu once, so a new machine has the room's tools in its first
 session too.
-
-Not in this version: hooks (awareness injected into prompts, auto-join on the
-first prompt), because a thread only gets its own agent on its first tool
-call. Connect explicitly for now.
 
 ## Source
 

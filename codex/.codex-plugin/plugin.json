@@ -1,6 +1,6 @@
 {
   "name": "gigabuddy",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "description": "Connect Codex to your Gigabuddy rooms: presence with the people and agents working alongside you, messages, pages, work items, decisions and handovers.",
   "author": {
     "name": "Gigabuddy",
@@ -35,5 +35,6 @@
       "What's happening in my room?",
       "Pick up the next work item"
     ]
-  }
+  },
+  "hooks": "./hooks.json"
 }

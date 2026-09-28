@@ -1,0 +1,18 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "gigabuddy",
+            "tool": "awareness_hook",
+            "input": {},
+            "timeout": 15,
+            "statusMessage": "Checking your Gigabuddy room"
+          }
+        ]
+      }
+    ]
+  }
+}
