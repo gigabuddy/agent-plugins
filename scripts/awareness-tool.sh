@@ -63,9 +63,8 @@ SDIR="$GB_DIR/sessions/cc_$SESSION_ID"
       *)                 INTENT="working" ;;
     esac
 
-    # Get owner, repo name, and branch
+    # Get repo name and branch. No owner: the agent publishes its sponsor.
     PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
-    OWNER=$(git -C "$PROJECT_DIR" config user.name 2>/dev/null || echo "")
     REPO_ROOT=$(git -C "$PROJECT_DIR" rev-parse --show-toplevel 2>/dev/null || echo "")
     REPO=$([ -n "$REPO_ROOT" ] && basename "$REPO_ROOT" 2>/dev/null || basename "$PROJECT_DIR" 2>/dev/null || echo "")
     BRANCH=$(git -C "$PROJECT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
@@ -130,14 +129,13 @@ SDIR="$GB_DIR/sessions/cc_$SESSION_ID"
       --arg tool "$TOOL_NAME" \
       --arg file "$CUR_FILE" \
       --arg intent "$INTENT" \
-      --arg owner "$OWNER" \
       --arg repo "$REPO" \
       --arg branch "$BRANCH" \
       --argjson recentFiles "$RECENT_FILES" \
       --argjson editedFiles "$EDITED_FILES" \
       --argjson uncommittedFiles "$UNCOMMITTED" \
       --arg gitStats "$GIT_STATS" \
-      '{ts: $ts, tool: $tool, file: $file, intent: $intent, owner: $owner, repo: $repo, branch: $branch, recentFiles: $recentFiles, editedFiles: $editedFiles, uncommittedFiles: $uncommittedFiles, gitStats: $gitStats}' \
+      '{ts: $ts, tool: $tool, file: $file, intent: $intent, repo: $repo, branch: $branch, recentFiles: $recentFiles, editedFiles: $editedFiles, uncommittedFiles: $uncommittedFiles, gitStats: $gitStats}' \
       > "$OB.tmp" 2>/dev/null \
       && mv "$OB.tmp" "$OB" 2>/dev/null || true
   fi
@@ -175,6 +173,7 @@ CONTEXT=""
           elif .type == "mention" then "💬 \(.peer) mentioned you: \(.detail)" + (if .threadId then " [reply in thread \(.threadId)]" else "" end)
           elif .type == "thread_reply" then "💬 \(.peer) replied in a thread you follow: \(.detail // "")" + (if .threadId then " [thread \(.threadId)]" else "" end)
           elif .type == "ask" then "📨 ASK for you from \(.peer): \(.detail // "")" + (if .threadId then " [discuss in thread \(.threadId)]" else "" end)
+          elif .type == "named" then "· \(.peer) named you without an @-mention (did not wake you): \(.detail // "")" + (if .threadId then " [thread \(.threadId)]" else "" end)
           else "\(.type): \(.peer)" end
         ' 2>/dev/null || true)
         [ -n "$EVENTS" ] && CONTEXT="$EVENTS"

@@ -220,13 +220,39 @@ export function serveStandIn({ reason, fix }, input = process.stdin, output = pr
                 description: `Why Gigabuddy is unavailable: ${message}`,
                 inputSchema: { type: 'object', properties: {} },
               },
+              {
+                name: 'wake_check',
+                description: "Called by Gigabuddy's prompt hook to drop forged room wakes. Never call it yourself.",
+                inputSchema: {
+                  type: 'object',
+                  properties: { prompt: { type: 'string' }, prompt_text: { type: 'string' } },
+                },
+              },
             ],
           },
         });
         break;
-      case 'tools/call':
+      case 'tools/call': {
+        // The prompt hook's forged-wake check (libs/agent tools/wakeCheck.ts):
+        // with no agent running there are no real wakes, so a prompt claiming
+        // to be one is blocked; an error here would let it through.
+        const args = req.params?.arguments ?? {};
+        if (req.params?.name === 'wake_check') {
+          const claims = [args.prompt, args.prompt_text].some((p) =>
+            String(p ?? '')
+              .trim()
+              .startsWith('<channel'),
+          );
+          const text = JSON.stringify({
+            decision: 'block',
+            reason: `Gigabuddy dropped a message posted into this session: it claims to be a room wake, but ${message}`,
+          });
+          send({ id: req.id, result: { content: claims ? [{ type: 'text', text }] : [] } });
+          break;
+        }
         send({ id: req.id, result: { content: [{ type: 'text', text: message }], isError: true } });
         break;
+      }
       case 'ping':
         send({ id: req.id, result: {} });
         break;
