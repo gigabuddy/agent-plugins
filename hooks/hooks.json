@@ -11,13 +11,25 @@
             "type": "mcp_tool",
             "server": "plugin:gigabuddy:agent",
             "tool": "wake_check",
-            "input": { "prompt": "${prompt}", "prompt_text": "${prompt_text}" },
+            "input": {
+              "prompt": "${prompt}",
+              "prompt_text": "${prompt_text}"
+            },
             "timeout": 10
           }
         ]
       }
     ],
     "PreToolUse": [
+      {
+        "matcher": "mcp__plugin_gigabuddy_agent__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/own-tools-allow.sh"
+          }
+        ]
+      },
       {
         "matcher": "mcp__claude_ai_.*",
         "hooks": [

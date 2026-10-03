@@ -10,6 +10,39 @@
             "input": {},
             "timeout": 15,
             "statusMessage": "Checking your Gigabuddy room"
+          },
+          {
+            "type": "command",
+            "command": "\"${PLUGIN_ROOT}/scripts/codex-hook.sh\" codex-prompt.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${PLUGIN_ROOT}/scripts/codex-hook.sh\" channel-guard.sh",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "\"${PLUGIN_ROOT}/scripts/codex-hook.sh\" awareness-tool.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${PLUGIN_ROOT}/scripts/codex-hook.sh\" session-close.sh",
+            "timeout": 5
           }
         ]
       }
