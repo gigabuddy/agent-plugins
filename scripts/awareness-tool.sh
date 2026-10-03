@@ -11,6 +11,10 @@
 #   (b) outbound — broadcast enriched state: current file, recent file history,
 #                  repo, branch, and derived intent from the tool name.
 #                  Written to the outbox the server polls. Fire-and-forget.
+#                  Paths under the repo root are written REPO-RELATIVE (with
+#                  `root` saying relative to what); the agent normalizes the
+#                  rest — nothing machine-local is ever broadcast
+#                  (decision:OaXqlRbYuEPM).
 #
 # The scratch dir is shared with the MCP server, computed identically.
 
@@ -30,13 +34,13 @@ SDIR="$GB_DIR/sessions/cc_$SESSION_ID"
 {
   if [ -d "$GB_DIR" ]; then
     TOOL_NAME=$(printf '%s' "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null || true)
-    CUR_FILE=$(printf '%s' "$INPUT" | jq -r '.tool_input.file_path // .tool_input.file // .tool_input.command // empty' 2>/dev/null || true)
+    CUR_FILE=$(printf '%s' "$INPUT" | jq -r '.tool_input.file_path // .tool_input.notebook_path // .tool_input.file // .tool_input.command // empty' 2>/dev/null || true)
 
     # Derive intent from tool name
     INTENT=""
     case "$TOOL_NAME" in
       Read)              INTENT="reading" ;;
-      Edit|Write)        INTENT="editing" ;;
+      Edit|Write|MultiEdit|NotebookEdit) INTENT="editing" ;;
       Bash)
         CMD=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
         case "$CMD" in
@@ -69,6 +73,22 @@ SDIR="$GB_DIR/sessions/cc_$SESSION_ID"
     REPO=$([ -n "$REPO_ROOT" ] && basename "$REPO_ROOT" 2>/dev/null || basename "$PROJECT_DIR" 2>/dev/null || echo "")
     BRANCH=$(git -C "$PROJECT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
 
+    # Repo-relative where it is cheap and certain: under REPO_ROOT and not inside
+    # a nested worktree/submodule (a `.git` between the file and the root). Pure
+    # builtins — no fork. Anything else stays as given; the agent resolves it.
+    gb_rel() {
+      GB_REL="$1"
+      [ -n "$REPO_ROOT" ] || return 0
+      case "$1" in "$REPO_ROOT"/*) ;; *) return 0 ;; esac
+      local d="${1%/*}"
+      while [ -n "$d" ] && [ "$d" != "$REPO_ROOT" ]; do
+        [ -e "$d/.git" ] && return 0
+        d="${d%/*}"
+      done
+      GB_REL="${1#"$REPO_ROOT"/}"
+    }
+    if [ -n "$CUR_FILE" ]; then gb_rel "$CUR_FILE"; CUR_FILE="$GB_REL"; fi
+
     [ -d "$SDIR" ] || mkdir -p "$SDIR" 2>/dev/null || true
     OB="$SDIR/outbox.json"
 
@@ -89,13 +109,18 @@ SDIR="$GB_DIR/sessions/cc_$SESSION_ID"
       RECENT_FILES="$PREV_FILES"
     fi
 
-    # Track edited files separately (Edit/Write only, deduped, max 50)
+    # Track edited files separately (edit tools only), MOST RECENT FIRST,
+    # deduped, max 50 — the agent publishes the head as `editing`.
     EDITED_FILES="$PREV_EDITED"
-    if [ -n "$CUR_FILE" ] && { [ "$TOOL_NAME" = "Edit" ] || [ "$TOOL_NAME" = "Write" ]; }; then
-      EDITED_FILES=$(printf '%s' "$PREV_EDITED" | jq --arg f "$CUR_FILE" '
-        if (. | index($f)) then . else . + [$f] end | .[0:50]
-      ' 2>/dev/null || echo "[]")
-    fi
+    case "$TOOL_NAME" in
+      Edit|Write|MultiEdit|NotebookEdit)
+        if [ -n "$CUR_FILE" ]; then
+          EDITED_FILES=$(printf '%s' "$PREV_EDITED" | jq --arg f "$CUR_FILE" '
+            [($f)] + [.[] | select(. != $f)] | .[0:50]
+          ' 2>/dev/null || echo "[]")
+        fi
+        ;;
+    esac
 
     # Throttled git stats — only recompute every 30s
     UNCOMMITTED="null"
@@ -110,7 +135,14 @@ SDIR="$GB_DIR/sessions/cc_$SESSION_ID"
       fi
     fi
     if [ "$UNCOMMITTED" = "null" ]; then
-      UNCOMMITTED=$(git -C "$PROJECT_DIR" status --porcelain 2>/dev/null | awk '{print $2}' | jq -R -s 'split("\n") | map(select(length > 0))' 2>/dev/null || echo "[]")
+      # -z: NUL-separated, root-relative, unquoted — survives spaces; a rename
+      # (R/C) carries its old path as the NEXT entry, which is skipped.
+      UNCOMMITTED=$(git -C "$PROJECT_DIR" status --porcelain -z 2>/dev/null | jq -R -s '
+        split("\u0000") | map(select(length > 0))
+        | reduce .[] as $e ({out: [], skip: false};
+            if .skip then .skip = false
+            else (.out += [$e[3:]]) | (if ($e[0:2] | test("[RC]")) then .skip = true else . end) end)
+        | .out' 2>/dev/null || echo "[]")
       MAIN_BRANCH=$(git -C "$PROJECT_DIR" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@refs/remotes/origin/@@' || echo "main")
       DIFF_STAT=$(git -C "$PROJECT_DIR" diff --stat "$MAIN_BRANCH"...HEAD 2>/dev/null | tail -1)
       if [ -n "$DIFF_STAT" ]; then
@@ -131,11 +163,12 @@ SDIR="$GB_DIR/sessions/cc_$SESSION_ID"
       --arg intent "$INTENT" \
       --arg repo "$REPO" \
       --arg branch "$BRANCH" \
+      --arg root "$REPO_ROOT" \
       --argjson recentFiles "$RECENT_FILES" \
       --argjson editedFiles "$EDITED_FILES" \
       --argjson uncommittedFiles "$UNCOMMITTED" \
       --arg gitStats "$GIT_STATS" \
-      '{ts: $ts, tool: $tool, file: $file, intent: $intent, repo: $repo, branch: $branch, recentFiles: $recentFiles, editedFiles: $editedFiles, uncommittedFiles: $uncommittedFiles, gitStats: $gitStats}' \
+      '{ts: $ts, tool: $tool, file: $file, intent: $intent, repo: $repo, branch: $branch, root: $root, recentFiles: $recentFiles, editedFiles: $editedFiles, uncommittedFiles: $uncommittedFiles, gitStats: $gitStats}' \
       > "$OB.tmp" 2>/dev/null \
       && mv "$OB.tmp" "$OB" 2>/dev/null || true
   fi

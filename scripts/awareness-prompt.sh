@@ -233,7 +233,14 @@ CONTEXT=$(printf '%s' "$INBOX_JSON" | jq -r --arg placeName "$PLACE_NAME" --arg 
             and ( (.lastActiveAt == null)
                   or (($now - ( .lastActiveAt | sub("\\.[0-9]+";"") | try fromdateiso8601 catch $now )) < (.coldSecs // 3600)) )
           ) ]) as $live
-      | ([ $live[] | select($selfRepo != "" and .repo == $selfRepo) | .displayName ]) as $here
+      # Same repo = same repoId when both sides publish one (display names
+      # collide across worktrees/forks); the name match is the old-peer fallback.
+      | (.self.repoId // "") as $selfRepoId
+      | ((.self.repo // "") | if . != "" then . else $selfRepo end) as $selfRepoName
+      | ([ $live[] | select(
+            if ($selfRepoId != "" and (.repoId // "") != "") then .repoId == $selfRepoId
+            else ($selfRepoName != "" and .repo == $selfRepoName) end
+          ) | .displayName ]) as $here
       | "Peers: " + ($ps | length | tostring) + " in the room · " + ($live | length | tostring) + " live"
         + (if ($here | length) > 0 then " · live in this repo: " + ($here | join(", ")) else "" end)
         + " (get_awareness for the full roster)" )

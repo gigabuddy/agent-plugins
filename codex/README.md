@@ -6,6 +6,9 @@ picks up work, records decisions and hands work over.
 
 ## Install
 
+Needs Codex 0.148 or newer. Older Codex can't read the plugin's prompt hook and
+reports `unknown variant mcp_tool` at startup; update Codex to fix it.
+
 ```bash
 npx -y gigabuddy setup codex
 ```
@@ -14,7 +17,7 @@ That adds the plugin, installs the agent (`npm i -g @gigabuddy/agent`) and, if
 you are signed in, loads your room's tool list. By hand:
 
 ```bash
-codex plugin marketplace add gigabuddy/claude-plugin
+codex plugin marketplace add gigabuddy/agent-plugins
 codex plugin add gigabuddy@gigabuddy
 npm i -g @gigabuddy/agent
 ```

@@ -8,7 +8,7 @@ on, conflicts, and messages — injected straight into context.
 
 ```bash
 # In Claude Code:
-/plugin marketplace add gigabuddy/claude-plugin
+/plugin marketplace add gigabuddy/agent-plugins
 /plugin install gigabuddy
 ```
 
