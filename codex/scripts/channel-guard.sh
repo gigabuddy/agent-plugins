@@ -41,10 +41,12 @@
 #   and, for a trusted sibling, `senderTurn`: how the SIBLING's own turn
 #   started, read by the bridge from the sibling's session dir on this disk
 #   (never asserted by the sender) — `attended` (the sponsor is driving it),
-#   `locked` (it was itself woken, so its request is relayed), `unknown` (its
-#   state is not here: another host or repo). A sibling's identity is not the
-#   risk — on this host it already shares the user's account and files. Relay
-#   is: a stranger wakes the sibling, the sibling chats to us.
+#   `rooted` (it was itself woken, but by the sponsor or by a sibling that was
+#   attended or rooted — the chain starts with the sponsor), `locked` (woken
+#   by anyone else, so its request is relayed), `unknown` (its state is not
+#   here: another host or repo). A sibling's identity is not the risk — on
+#   this host it already shares the user's account and files. Relay is: a
+#   stranger wakes the sibling, the sibling chats to us.
 #   - Gigabuddy collaboration tools (chat, raise, log, answer, …): allowed.
 #     They act in the room under the agent's own server-attributed identity.
 #   - Read/Grep/Glob: allowed INSIDE the repository only. Paths outside the
@@ -54,6 +56,11 @@
 #       sponsor wake, or attended sibling → "allow": the guard steps aside and
 #         the session's OWN permission mode governs (auto-mode classifier,
 #         allow/deny rules) — exactly as if the sponsor had typed it.
+#       rooted sibling → the same, when the sponsor's choice for requests
+#         between their agents is "act" (the stamp's `siblings`, from the
+#         server's wake check; set in the app's members list). That is how the
+#         sponsor's agents work together while the sponsor is away, each under
+#         its own approval mode. "ask", or no choice known → as a locked one.
 #       locked/unknown sibling + permission relay on → "ask": Claude Code
 #         opens its permission prompt, the bridge relays it to the sponsor as
 #         a consent request (card in the thread + their inbox), and only the
@@ -70,9 +77,10 @@
 #         "reads":   "repo" | "sponsor-only" | "none" }
 #     `gigabuddy trust add <name> --in <room>` writes trustedSenders for you.
 #     Values: allow | ask | deny. "ask" degrades to deny when relay is off.
-#     The `sponsor` block covers the sponsor and attended siblings; the
-#     `trusted` block covers locked/unknown siblings and vouched ids, and never
-#     inherits the sponsor's allow. "sponsor-only" reads include trusted.
+#     The `sponsor` block covers the sponsor and attended siblings, and rooted
+#     siblings the sponsor lets act; the `trusted` block covers the rest of the
+#     siblings and vouched ids, and never inherits the sponsor's allow.
+#     "sponsor-only" reads include trusted.
 #   - StructuredOutput: always allowed. It is how a subagent hands its answer
 #     back — pure output, no side effect — so gating it protects nothing and
 #     silently discards the work (issue:5EldoPFv9RzW).
@@ -141,7 +149,10 @@ case "$TRUST" in sponsor|trusted|other) : ;; *) TRUST=other ;; esac
 # by the bridge from the sibling's session dir on this disk — never asserted
 # by the sender. Older stamps have none: unknown.
 SENDER_TURN=$(printf '%s' "$STAMP" | jq -r '.senderTurn // "unknown"' 2>/dev/null || echo unknown)
-case "$SENDER_TURN" in attended|locked|unknown) : ;; *) SENDER_TURN=unknown ;; esac
+case "$SENDER_TURN" in attended|rooted|locked|unknown) : ;; *) SENDER_TURN=unknown ;; esac
+# The sponsor's choice for requests between their own agents, from the server's
+# wake check (`act` | `ask`). Absent (an old bridge or server, a failed check) = ask.
+SIBLINGS=$(printf '%s' "$STAMP" | jq -r 'if .siblings == "act" then "act" else "ask" end' 2>/dev/null || echo ask)
 
 POLICY='{}'
 if [ -f "$GB_DIR/channel-policy.json" ]; then
@@ -241,9 +252,11 @@ esac
 # decision:AGM9OjIn8GtF — gated on WHO is asking, not on whether someone is at
 # the keyboard. The sponsor, or a sibling the sponsor is driving, runs as if
 # the sponsor had typed: the guard steps aside ("allow") and the session's OWN
-# permission mode governs from here. A sibling that is itself in a locked turn
-# is passing someone's words on; one whose state is not on this disk cannot be
-# told apart — both ask. "Allow" here is not "unrestricted".
+# permission mode governs from here. So does a sibling whose chain starts with
+# the sponsor (rooted), when the sponsor lets their agents act for each other. A
+# sibling woken by anyone else is passing someone's words on; one whose state
+# is not on this disk cannot be told apart — both ask. "Allow" here is not
+# "unrestricted".
 case "$TRUST" in
   sponsor)
     POSTURE=$(printf '%s' "$POLICY" | jq -r --arg t "$TOOL_NAME" '.sponsor.tools[$t] // .sponsor.default // "allow"' 2>/dev/null || echo allow)
@@ -254,6 +267,10 @@ case "$TRUST" in
       # The sponsor's own posture: they are the one asking, through their agent.
       POSTURE=$(printf '%s' "$POLICY" | jq -r --arg t "$TOOL_NAME" '.sponsor.tools[$t] // .sponsor.default // "allow"' 2>/dev/null || echo allow)
       SUBJECT="$WHO, an agent your sponsor is driving (its own turn is attended)"
+    elif [ "$SENDER_TURN" = "rooted" ] && [ "$SIBLINGS" = "act" ]; then
+      # Woken, but only ever by the sponsor and their agents: still the sponsor asking.
+      POSTURE=$(printf '%s' "$POLICY" | jq -r --arg t "$TOOL_NAME" '.sponsor.tools[$t] // .sponsor.default // "allow"' 2>/dev/null || echo allow)
+      SUBJECT="$WHO, an agent of your sponsor's that was woken by your sponsor or their agents (its own turn is rooted)"
     else
       # The trusted block stands on its own — it never inherits the sponsor's
       # allow, because this request may have been relayed from a stranger.
