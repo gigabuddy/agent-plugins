@@ -316,7 +316,13 @@ SESSION_TITLE_HINT=""
   . "$(dirname "${BASH_SOURCE[0]}")/lib/session-title.sh"
   SELF_NAME=$(printf '%s' "$INBOX_JSON" | jq -r '.self.displayName // empty' 2>/dev/null || true)
   CUR_TITLE=$(printf '%s' "$INPUT" | jq -r '.session_title // empty' 2>/dev/null || true)
-  gigabuddy_session_title "$SELF_NAME" "$CUR_TITLE" "$SDIR"
+  # Claude's own topic title isn't in the hook input; it is the transcript's
+  # last "ai-title" line (re-appended as the topic moves; ~20 ms on a 2 MB file).
+  TRANSCRIPT=$(printf '%s' "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null || true)
+  TOPIC=""
+  [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ] &&
+    TOPIC=$(grep -a '"type":"ai-title"' "$TRANSCRIPT" 2>/dev/null | tail -1 | jq -r '.aiTitle // empty' 2>/dev/null || true)
+  [ -n "$SELF_NAME" ] && gigabuddy_session_title "$SELF_NAME" "$CUR_TITLE" "$TOPIC" "$SDIR"
 } || true
 
 if [ -n "$CONTEXT" ] || [ -n "$SESSION_TITLE_OUT" ]; then
