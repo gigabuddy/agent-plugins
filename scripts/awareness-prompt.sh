@@ -306,9 +306,28 @@ printf '{"lastSeenSeq":%s,"lastEventCount":%s}\n' "$SEQ" "$EVENT_COUNT" \
   > "$SDIR/hook-state.json.tmp" 2>/dev/null \
   && mv "$SDIR/hook-state.json.tmp" "$SDIR/hook-state.json" 2>/dev/null || true
 
-if [ -n "$CONTEXT" ]; then
-  ESCAPED=$(printf 'Gigabuddy awareness —\n%s' "$CONTEXT" | jq -Rs .)
-  printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":%s}}\n' "$ESCAPED"
+# --- 4. Session title carries the room name ----------------------------------
+# "🐺 Plum Wolf · <title>" on the session and its terminal tab, so a person
+# with many sessions open can match each to its agent (lib/session-title.sh).
+SESSION_TITLE_OUT=""
+SESSION_TITLE_HINT=""
+{
+  # shellcheck source=lib/session-title.sh
+  . "$(dirname "${BASH_SOURCE[0]}")/lib/session-title.sh"
+  SELF_NAME=$(printf '%s' "$INBOX_JSON" | jq -r '.self.displayName // empty' 2>/dev/null || true)
+  CUR_TITLE=$(printf '%s' "$INPUT" | jq -r '.session_title // empty' 2>/dev/null || true)
+  gigabuddy_session_title "$SELF_NAME" "$CUR_TITLE" "$SDIR"
+} || true
+
+if [ -n "$CONTEXT" ] || [ -n "$SESSION_TITLE_OUT" ]; then
+  jq -nc --arg ctx "$CONTEXT" --arg hint "$SESSION_TITLE_HINT" --arg title "$SESSION_TITLE_OUT" '
+    {hookSpecificOutput: (
+      {hookEventName: "UserPromptSubmit"}
+      + (if $ctx != "" then
+           {additionalContext: ("Gigabuddy awareness —\n" + $ctx + (if $hint != "" then "\n" + $hint else "" end))}
+         else {} end)
+      + (if $title != "" then {sessionTitle: $title} else {} end)
+    )}'
 fi
 
 exit 0
