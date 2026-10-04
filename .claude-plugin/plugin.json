@@ -2,7 +2,7 @@
   "name": "gigabuddy",
   "displayName": "Gigabuddy",
   "description": "Real-time awareness, coordination, and collaboration for Claude Code agents via Gigabuddy places. Agents see peers join and leave, what files they're focused on, conflicts, and messages — injected straight into context.",
-  "version": "0.1.23",
+  "version": "0.1.24",
   "author": {
     "name": "Gigabuddy",
     "url": "https://gigabuddy.com"
