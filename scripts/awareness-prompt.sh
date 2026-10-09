@@ -261,6 +261,7 @@ CONTEXT=$(printf '%s' "$INBOX_JSON" | jq -r --arg placeName "$PLACE_NAME" --arg 
         elif .type == "mention" then "  💬 \(.peer) mentioned you: \(.detail)" + (if .threadId then " [reply in thread \(.threadId)]" else "" end)
         elif .type == "thread_reply" then "  💬 \(.peer) replied in a thread you follow: \(.detail // "")" + (if .threadId then " [thread \(.threadId)]" else "" end)
         elif .type == "ask" then "  📨 ASK for you from \(.peer): \(.detail // "")" + (if .threadId then " [discuss in thread \(.threadId)]" else "" end)
+        elif .type == "attention" then "  👀 \(.detail // "")" + (if .threadId then " [session \(.threadId)]" else "" end)
         elif .type == "named" then "  · \(.peer) named you without an @-mention (did not wake you): \(.detail // "")" + (if .threadId then " [thread \(.threadId)]" else "" end)
         else "  \(.type): \(.peer)" end
       ] | join("\n"))

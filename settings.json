@@ -8,10 +8,11 @@
     "allow": [
       "mcp__plugin_gigabuddy_agent__connect",
       "mcp__plugin_gigabuddy_agent__list_places",
+      "mcp__plugin_gigabuddy_agent__list_rooms",
       "mcp__plugin_gigabuddy_agent__disconnect",
       "mcp__plugin_gigabuddy_agent__send_message",
       "mcp__plugin_gigabuddy_agent__get_messages",
-      "mcp__plugin_gigabuddy_agent__wait_for_reply",
+      "mcp__plugin_gigabuddy_agent__listen",
       "mcp__plugin_gigabuddy_agent__get_awareness",
       "mcp__plugin_gigabuddy_agent__session_status",
       "mcp__plugin_gigabuddy_agent__start_activity",

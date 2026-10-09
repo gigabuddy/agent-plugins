@@ -228,6 +228,13 @@ export function serveStandIn({ reason, fix }, input = process.stdin, output = pr
                   properties: { prompt: { type: 'string' }, prompt_text: { type: 'string' } },
                 },
               },
+              // The mod's four verbs (libs/agent tools/sessionBridgeTools.ts): with no
+              // agent running there is nobody to relay to or collect from.
+              ...['session_commands_wait', 'permission_check', 'permission_wait', 'permission_settled'].map((name) => ({
+                name,
+                description: "Called by Gigabuddy's mod. Never call it yourself.",
+                inputSchema: { type: 'object', properties: {} },
+              })),
             ],
           },
         });
@@ -248,6 +255,23 @@ export function serveStandIn({ reason, fix }, input = process.stdin, output = pr
             reason: `Gigabuddy dropped a message posted into this session: it claims to be a room wake, but ${message}`,
           });
           send({ id: req.id, result: { content: claims ? [{ type: 'text', text }] : [] } });
+          break;
+        }
+        // The mod's verbs: nothing to collect, nothing relayed, nothing to settle.
+        if (req.params?.name === 'session_commands_wait') {
+          send({ id: req.id, result: { content: [{ type: 'text', text: '{"commands":[]}' }] } });
+          break;
+        }
+        if (req.params?.name === 'permission_check') {
+          send({ id: req.id, result: { content: [{ type: 'text', text: '{"status":"none"}' }] } });
+          break;
+        }
+        if (req.params?.name === 'permission_wait') {
+          send({ id: req.id, result: { content: [{ type: 'text', text: '{"behavior":"settled"}' }] } });
+          break;
+        }
+        if (req.params?.name === 'permission_settled') {
+          send({ id: req.id, result: { content: [{ type: 'text', text: '{"settled":0}' }] } });
           break;
         }
         send({ id: req.id, result: { content: [{ type: 'text', text: message }], isError: true } });
