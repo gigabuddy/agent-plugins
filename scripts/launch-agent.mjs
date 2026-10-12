@@ -228,9 +228,15 @@ export function serveStandIn({ reason, fix }, input = process.stdin, output = pr
                   properties: { prompt: { type: 'string' }, prompt_text: { type: 'string' } },
                 },
               },
-              // The mod's four verbs (libs/agent tools/sessionBridgeTools.ts): with no
+              // The mod's five verbs (libs/agent tools/sessionBridgeTools.ts): with no
               // agent running there is nobody to relay to or collect from.
-              ...['session_commands_wait', 'permission_check', 'permission_wait', 'permission_settled'].map((name) => ({
+              ...[
+                'session_commands_socket',
+                'session_commands_wait',
+                'permission_check',
+                'permission_wait',
+                'permission_settled',
+              ].map((name) => ({
                 name,
                 description: "Called by Gigabuddy's mod. Never call it yourself.",
                 inputSchema: { type: 'object', properties: {} },
@@ -258,6 +264,11 @@ export function serveStandIn({ reason, fix }, input = process.stdin, output = pr
           break;
         }
         // The mod's verbs: nothing to collect, nothing relayed, nothing to settle.
+        // No socket: the mod has nothing to collect, so it does not wait at all.
+        if (req.params?.name === 'session_commands_socket') {
+          send({ id: req.id, result: { content: [{ type: 'text', text: '{"socketPath":null}' }] } });
+          break;
+        }
         if (req.params?.name === 'session_commands_wait') {
           send({ id: req.id, result: { content: [{ type: 'text', text: '{"commands":[]}' }] } });
           break;

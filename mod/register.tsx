@@ -3,12 +3,19 @@
  * record (page:ihuoK970I4i8, decision:FWFiBJHe8lPw).
  *
  * The plugin's own MCP server (`agent`) already holds the live connection to
- * Gigabuddy; this module reaches it with `$.mcp.call` and does one thing: a
- * loop collects what the person sent from the session view
- * (`session_commands_wait`, bounded, re-armed from a timer so no MCP call
- * outlives its timeout and nothing polls a server). A message is submitted as
- * the person's own words (`$.prompt.submit` with `asUser`, a turn of its own
- * once the session is idle); a Stop ends the running turn.
+ * Gigabuddy, and this module does one thing: a loop collects what the person
+ * sent from the session view (bounded waits, re-armed from a timer, so nothing
+ * polls a server). A message is submitted as the person's own words
+ * (`$.prompt.submit` with `asUser`, a turn of its own once the session is
+ * idle); a Stop ends the running turn.
+ *
+ * The wait runs over the agent's private socket (`$.http.fetch`), which
+ * `session_commands_socket` names. Never over `$.mcp.call` when it can be
+ * helped: an MCP call in flight is moved to a background task whenever a
+ * message reaches the session, and its result then reaches the MODEL as a task
+ * notification. That put an "MCP task … session_commands_wait completed"
+ * notice on nearly every prompt. Only an agent older than the socket gets the
+ * MCP wait (`session_commands_wait`).
  *
  * It does NOT decide tool prompts. A mod can only replace Claude Code's own
  * permission dialog with a prompt of its own, which loses the dialog's choices
@@ -31,10 +38,11 @@ const SERVER_KEY = 'agent';
 const WAIT_MS = 25_000;
 /** Between two inbound waits — a breath, not a poll: the wait itself blocks until something arrives. */
 const REARM_MS = 50;
+/** After a failed wait, before asking the agent again where to wait (it may have restarted). */
+const RETRY_MS = 5_000;
 
-/** The first text block of an MCP result, parsed as JSON; `{}` when it is not. */
-function parse(result: { content: Array<{ type: string; text?: string }> }): Record<string, unknown> {
-  const text = result.content.find((c) => c.type === 'text')?.text;
+/** A JSON object from text; `{}` when it is not one. */
+function parseJson(text: string | undefined): Record<string, unknown> {
   if (!text) return {};
   try {
     const parsed = JSON.parse(text) as unknown;
@@ -44,18 +52,74 @@ function parse(result: { content: Array<{ type: string; text?: string }> }): Rec
   }
 }
 
-/** What the inbound loop needs of the module: the server's name, and the running turn for Stop. */
-type Link = { server: string | null; turnId: string | null };
+/** The first text block of an MCP result, parsed as JSON; `{}` when it is not. */
+function parse(result: { content: Array<{ type: string; text?: string }> }): Record<string, unknown> {
+  return parseJson(result.content.find((c) => c.type === 'text')?.text);
+}
 
-/** One wait on the server, then whatever came in, then the next wait. Re-armed from a timer: work that outlives a dispatch. */
+/** Where the inbound loop waits: the agent's private socket, or MCP for an agent older than it. */
+type Inbound = { kind: 'socket'; socketPath: string; token: string } | { kind: 'mcp' };
+
+/** What the inbound loop needs of the module: the server, where it waits, and the running turn for Stop. */
+type Link = { server: string | null; inbound: Inbound | null; socketFailures: number; turnId: string | null };
+
+/** Socket waits that may fail in a row (the agent restarted, a fresh socket) before the loop settles for MCP. */
+const SOCKET_FAILURES_MAX = 2;
+
+/** Ask the agent where to wait. Null: nothing to collect (the launcher's stand-in, with no agent running). */
+async function locate($: EngineInterface, server: string): Promise<Inbound | null> {
+  try {
+    const result = await $.mcp.call(server, 'session_commands_socket');
+    // An agent without the verb, or one that could not open its socket.
+    if (result.isError) return { kind: 'mcp' };
+    const { socketPath, token } = parse(result);
+    return typeof socketPath === 'string' && typeof token === 'string' ? { kind: 'socket', socketPath, token } : null;
+  } catch {
+    return { kind: 'mcp' };
+  }
+}
+
+/** One bounded wait: everything held, the next command, or nothing after WAIT_MS. */
+async function wait($: EngineInterface, server: string, inbound: Inbound): Promise<unknown> {
+  if (inbound.kind === 'mcp')
+    return parse(await $.mcp.call(server, 'session_commands_wait', { timeout_ms: WAIT_MS }))['commands'];
+  const res = await $.http.fetch(`http://agent/commands?wait=${WAIT_MS}`, {
+    socketPath: inbound.socketPath,
+    headers: { authorization: `Bearer ${inbound.token}` },
+  });
+  if (!res.ok) throw new Error(`the agent answered ${res.status}`);
+  return parseJson(res.text)['commands'];
+}
+
+/** One wait, then whatever came in, then the next wait. Re-armed from a timer: work that outlives a dispatch. */
 async function collect($: EngineInterface, link: Link): Promise<void> {
   if (!link.server) return;
+  if (!link.inbound) {
+    const found = await locate($, link.server);
+    // A socket this host cannot reach (a fetch policy, a platform without Unix sockets): wait over MCP.
+    link.inbound = found?.kind === 'socket' && link.socketFailures >= SOCKET_FAILURES_MAX ? { kind: 'mcp' } : found;
+  }
+  if (!link.inbound) {
+    $.ui.log('gigabuddy: no agent running, so nothing to collect from Gigabuddy', { to: 'debug' });
+    return;
+  }
+  let commands: unknown;
   try {
-    const { commands } = parse(await $.mcp.call(link.server, 'session_commands_wait', { timeout_ms: WAIT_MS }));
-    for (const command of Array.isArray(commands) ? commands : [])
-      await handle($, link, command as Record<string, unknown>);
+    commands = await wait($, link.server, link.inbound);
+    if (link.inbound.kind === 'socket') link.socketFailures = 0;
   } catch (err) {
     $.ui.log(`gigabuddy: session commands wait failed: ${String(err)}`, { to: 'debug' });
+    if (link.inbound.kind === 'socket') link.socketFailures += 1;
+    link.inbound = null;
+    $.clock.after(RETRY_MS, () => void collect($, link));
+    return;
+  }
+  for (const command of Array.isArray(commands) ? commands : []) {
+    try {
+      await handle($, link, command as Record<string, unknown>);
+    } catch (err) {
+      $.ui.log(`gigabuddy: a command from Gigabuddy failed: ${String(err)}`, { to: 'debug' });
+    }
   }
   $.clock.after(REARM_MS, () => void collect($, link));
 }
@@ -78,8 +142,8 @@ async function handle($: EngineInterface, link: Link, command: Record<string, un
 }
 
 export const register: Register = (on) => {
-  /** The server's name as `$.mcp.call` takes it (null until connected), and the running turn. */
-  const link: Link = { server: null, turnId: null };
+  /** The server's name as `$.mcp.call` takes it (null until connected), where to wait, and the running turn. */
+  const link: Link = { server: null, inbound: null, socketFailures: 0, turnId: null };
 
   // ── Inbound: what the person sent from the session view ─────────────────────
 
