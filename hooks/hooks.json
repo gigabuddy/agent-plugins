@@ -32,6 +32,15 @@
         ]
       },
       {
+        "matcher": "SendMessage",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/sendmessage-redirect.sh"
+          }
+        ]
+      },
+      {
         "matcher": "mcp__claude_ai_.*",
         "hooks": [
           {

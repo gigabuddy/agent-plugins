@@ -75,6 +75,22 @@ gigabuddy_name_emoji() {
   esac
 }
 
+# The Gigabuddy agent name in an address, or failure when there is none.
+# Takes what a model might hand Claude Code's SendMessage after reading
+# ListAgents: "Grove Kite", "@Grove Kite", "Grove Kite [17adab]", or the whole
+# title we set, "🐦 Grove Kite · Superseded decision question [17adab]".
+# A name is two capitalised words ending in an animal from the room's name
+# list — the case above, so there is one list to keep in step.
+gigabuddy_agent_name_in() {
+  local t="$1"
+  t="${t% \[*\]}"   # the ListAgents ref
+  t="${t%% · *}"    # our title's topic
+  t="$(printf '%s' "$t" | LC_ALL=C sed -E 's/^[^A-Za-z]+//; s/[[:space:]]+$//')" # emoji, @
+  [[ "$t" =~ ^[A-Z][a-z]+\ [A-Z][a-z]+$ ]] || return 1
+  [ "$(gigabuddy_name_emoji "$t")" != '🐾' ] || return 1
+  printf '%s' "$t"
+}
+
 # Usage: gigabuddy_session_title <name> <custom title> <topic title> <session dir>
 #   custom title: the hook input's session_title ("" when none)
 #   topic title:  Claude's latest ai-title from the transcript ("" when none)
