@@ -10,12 +10,17 @@
  * idle); a Stop ends the running turn.
  *
  * The wait runs over the agent's private socket (`$.http.fetch`), which
- * `session_commands_socket` names. Never over `$.mcp.call` when it can be
- * helped: an MCP call in flight is moved to a background task whenever a
- * message reaches the session, and its result then reaches the MODEL as a task
- * notification. That put an "MCP task … session_commands_wait completed"
- * notice on nearly every prompt. Only an agent older than the socket gets the
- * MCP wait (`session_commands_wait`).
+ * `session_commands_socket` names, and only there. Never over `$.mcp.call`: an
+ * MCP call in flight is moved to a background task whenever a message reaches
+ * the session, and its result then reaches the MODEL as a task notification —
+ * on an idle session a turn of its own, which moves the next wait to the
+ * background in turn, so the model wakes itself every 25s. The MCP fallback
+ * this loop once had did exactly that on 2026-10-19: an IPv4 outage failed two
+ * socket waits in a row, every open session settled on MCP for good and kept
+ * waking itself. So a failed wait only backs off and asks the agent again
+ * where to wait (it may have restarted). A session the socket cannot serve is
+ * not driven from Gigabuddy, which costs far less than a model that wakes
+ * itself.
  *
  * It does NOT decide tool prompts. A mod can only replace Claude Code's own
  * permission dialog with a prompt of its own, which loses the dialog's choices
@@ -34,12 +39,13 @@ import type { EngineInterface, Register } from 'claude-code';
 
 /** The server's key in this plugin's .mcp.json. */
 const SERVER_KEY = 'agent';
-/** One bounded wait on the server; the tools cap it there too. */
+/** One bounded wait on the agent; the socket caps it there too. */
 const WAIT_MS = 25_000;
 /** Between two inbound waits — a breath, not a poll: the wait itself blocks until something arrives. */
 const REARM_MS = 50;
-/** After a failed wait, before asking the agent again where to wait (it may have restarted). */
+/** After a failed wait, before asking the agent again where to wait; doubled per failure in a row, up to RETRY_MAX_MS. */
 const RETRY_MS = 5_000;
+const RETRY_MAX_MS = 60_000;
 
 /** A JSON object from text; `{}` when it is not one. */
 function parseJson(text: string | undefined): Record<string, unknown> {
@@ -52,37 +58,27 @@ function parseJson(text: string | undefined): Record<string, unknown> {
   }
 }
 
-/** The first text block of an MCP result, parsed as JSON; `{}` when it is not. */
-function parse(result: { content: Array<{ type: string; text?: string }> }): Record<string, unknown> {
-  return parseJson(result.content.find((c) => c.type === 'text')?.text);
-}
+/** Where the inbound loop waits: the agent's private socket. */
+type Inbound = { socketPath: string; token: string };
 
-/** Where the inbound loop waits: the agent's private socket, or MCP for an agent older than it. */
-type Inbound = { kind: 'socket'; socketPath: string; token: string } | { kind: 'mcp' };
+/** What the inbound loop needs of the module: the server, where it waits, failures in a row, and the running turn for Stop. */
+type Link = { server: string | null; inbound: Inbound | null; failures: number; turnId: string | null };
 
-/** What the inbound loop needs of the module: the server, where it waits, and the running turn for Stop. */
-type Link = { server: string | null; inbound: Inbound | null; socketFailures: number; turnId: string | null };
-
-/** Socket waits that may fail in a row (the agent restarted, a fresh socket) before the loop settles for MCP. */
-const SOCKET_FAILURES_MAX = 2;
-
-/** Ask the agent where to wait. Null: nothing to collect (the launcher's stand-in, with no agent running). */
-async function locate($: EngineInterface, server: string): Promise<Inbound | null> {
-  try {
-    const result = await $.mcp.call(server, 'session_commands_socket');
-    // An agent without the verb, or one that could not open its socket.
-    if (result.isError) return { kind: 'mcp' };
-    const { socketPath, token } = parse(result);
-    return typeof socketPath === 'string' && typeof token === 'string' ? { kind: 'socket', socketPath, token } : null;
-  } catch {
-    return { kind: 'mcp' };
-  }
+/**
+ * Ask the agent where to wait. 'none': nothing to collect (the launcher's
+ * stand-in, with no agent running). Throws when the agent can't say right now
+ * (restarting, a socket it could not open, an agent without the verb).
+ */
+async function locate($: EngineInterface, server: string): Promise<Inbound | 'none'> {
+  const result = await $.mcp.call(server, 'session_commands_socket');
+  const text = result.content.find((c) => c.type === 'text')?.text;
+  if (result.isError) throw new Error(`no socket from the agent: ${text ?? 'no reason given'}`);
+  const { socketPath, token } = parseJson(text);
+  return typeof socketPath === 'string' && typeof token === 'string' ? { socketPath, token } : 'none';
 }
 
 /** One bounded wait: everything held, the next command, or nothing after WAIT_MS. */
-async function wait($: EngineInterface, server: string, inbound: Inbound): Promise<unknown> {
-  if (inbound.kind === 'mcp')
-    return parse(await $.mcp.call(server, 'session_commands_wait', { timeout_ms: WAIT_MS }))['commands'];
+async function wait($: EngineInterface, inbound: Inbound): Promise<unknown> {
   const res = await $.http.fetch(`http://agent/commands?wait=${WAIT_MS}`, {
     socketPath: inbound.socketPath,
     headers: { authorization: `Bearer ${inbound.token}` },
@@ -94,24 +90,24 @@ async function wait($: EngineInterface, server: string, inbound: Inbound): Promi
 /** One wait, then whatever came in, then the next wait. Re-armed from a timer: work that outlives a dispatch. */
 async function collect($: EngineInterface, link: Link): Promise<void> {
   if (!link.server) return;
-  if (!link.inbound) {
-    const found = await locate($, link.server);
-    // A socket this host cannot reach (a fetch policy, a platform without Unix sockets): wait over MCP.
-    link.inbound = found?.kind === 'socket' && link.socketFailures >= SOCKET_FAILURES_MAX ? { kind: 'mcp' } : found;
-  }
-  if (!link.inbound) {
-    $.ui.log('gigabuddy: no agent running, so nothing to collect from Gigabuddy', { to: 'debug' });
-    return;
-  }
   let commands: unknown;
   try {
-    commands = await wait($, link.server, link.inbound);
-    if (link.inbound.kind === 'socket') link.socketFailures = 0;
+    if (!link.inbound) {
+      const found = await locate($, link.server);
+      if (found === 'none') {
+        $.ui.log('gigabuddy: no agent running, so nothing to collect from Gigabuddy', { to: 'debug' });
+        return;
+      }
+      link.inbound = found;
+    }
+    commands = await wait($, link.inbound);
+    link.failures = 0;
   } catch (err) {
-    $.ui.log(`gigabuddy: session commands wait failed: ${String(err)}`, { to: 'debug' });
-    if (link.inbound.kind === 'socket') link.socketFailures += 1;
+    const delay = Math.min(RETRY_MS * 2 ** link.failures, RETRY_MAX_MS);
+    link.failures += 1;
     link.inbound = null;
-    $.clock.after(RETRY_MS, () => void collect($, link));
+    $.ui.log(`gigabuddy: session commands wait failed (${String(err)}); again in ${delay}ms`, { to: 'debug' });
+    $.clock.after(delay, () => void collect($, link));
     return;
   }
   for (const command of Array.isArray(commands) ? commands : []) {
@@ -142,8 +138,8 @@ async function handle($: EngineInterface, link: Link, command: Record<string, un
 }
 
 export const register: Register = (on) => {
-  /** The server's name as `$.mcp.call` takes it (null until connected), where to wait, and the running turn. */
-  const link: Link = { server: null, inbound: null, socketFailures: 0, turnId: null };
+  /** The server's name as `$.mcp.call` takes it (null until connected), where to wait, failures in a row, and the running turn. */
+  const link: Link = { server: null, inbound: null, failures: 0, turnId: null };
 
   // ── Inbound: what the person sent from the session view ─────────────────────
 

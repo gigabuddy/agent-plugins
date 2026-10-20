@@ -61,14 +61,32 @@ test('a message from the session view is submitted as the person, and Stop ends 
   expect(mcpWaits).toBe(0);
 });
 
-test('an agent without the socket is waited on over MCP', async ($, on) => {
+test('a failed wait backs off and asks the agent again — it never waits over MCP', async ($, on) => {
   const submitted: string[] = [];
+  const located: number[] = [];
+  let fetches = 0;
   let mcpWaits = 0;
   const clock = bottom(on);
-  on('mcp.call', { tool: 'session_commands_socket' }, () => result({ error: 'unknown tool' }, true));
+  on('mcp.call', { tool: 'session_commands_socket' }, () => {
+    located.push(fetches);
+    return result({ socketPath: `/tmp/gb-mod-${located.length}/commands.sock`, token: 't0k' });
+  });
   on('mcp.call', { tool: 'session_commands_wait' }, () => {
     mcpWaits += 1;
-    return result({ commands: mcpWaits === 1 ? [{ kind: 'message', text: 'from an older agent' }] : [] });
+    return result({ commands: [] });
+  });
+  // The host can't reach the socket for four waits (an outage, a sleep), then the agent answers again.
+  on('http.fetch', () => {
+    fetches += 1;
+    if (fetches <= 4) throw new Error('no complete answer within 30000ms');
+    return {
+      value: {
+        status: 200,
+        ok: true,
+        headers: {},
+        text: JSON.stringify({ commands: fetches === 5 ? [{ kind: 'message', text: 'back again' }] : [] }),
+      },
+    };
   });
   on('prompt.submit', ($, e) => {
     submitted.push(e.text);
@@ -76,32 +94,43 @@ test('an agent without the socket is waited on over MCP', async ($, on) => {
   });
   await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true });
   await clock.advance(100);
-  expect(submitted).toEqual(['from an older agent']);
-  expect(mcpWaits).toBeGreaterThan(0);
+  expect(fetches).toBe(1);
+  // 5s, 10s, 20s between attempts: doubling, each one re-locating the socket.
+  await clock.advance(5_000);
+  expect(fetches).toBe(2);
+  await clock.advance(9_000);
+  expect(fetches).toBe(2);
+  await clock.advance(1_000);
+  expect(fetches).toBe(3);
+  await clock.advance(20_000);
+  expect(fetches).toBe(4);
+  await clock.advance(40_000);
+  await clock.advance(100);
+  expect(submitted).toEqual(['back again']);
+  expect(located).toEqual([0, 1, 2, 3, 4]);
+  expect(mcpWaits).toBe(0);
 });
 
-test('a socket this host cannot reach is retried, then the wait settles on MCP', async ($, on) => {
-  let fetches = 0;
+test('an agent that cannot name a socket is asked again later, never waited on over MCP', async ($, on) => {
+  let asks = 0;
   let mcpWaits = 0;
   const clock = bottom(on);
-  on('mcp.call', { tool: 'session_commands_socket' }, () =>
-    result({ socketPath: '/tmp/gb-mod-x/commands.sock', token: 't0k' }),
-  );
+  on('mcp.call', { tool: 'session_commands_socket' }, () => {
+    asks += 1;
+    return result({ error: 'unknown tool' }, true);
+  });
   on('mcp.call', { tool: 'session_commands_wait' }, () => {
     mcpWaits += 1;
     return result({ commands: [] });
   });
-  on('http.fetch', () => {
-    fetches += 1;
-    return { value: { status: 403, ok: false, headers: {}, text: '' } };
-  });
   await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true });
   await clock.advance(100);
   await clock.advance(5_000);
-  await clock.advance(5_000);
-  await clock.advance(100);
-  expect(fetches).toBe(2);
-  expect(mcpWaits).toBeGreaterThan(0);
+  expect(asks).toBe(2);
+  // The backoff caps at a minute.
+  await clock.advance(10 * 60_000);
+  expect(asks).toBeLessThan(16);
+  expect(mcpWaits).toBe(0);
 });
 
 test('with no agent running (the launcher stand-in) nothing waits at all', async ($, on) => {
