@@ -49,9 +49,13 @@
 #   stranger wakes the sibling, the sibling chats to us.
 #   - Gigabuddy collaboration tools (chat, raise, log, answer, …): allowed.
 #     They act in the room under the agent's own server-attributed identity.
-#   - Read/Grep/Glob: allowed INSIDE the repository only. Paths outside the
-#     launch repo, and dotfiles under $HOME, are denied for everyone — a woken
-#     turn posts into a shared room (issue:SxYNJgM3aknV).
+#   - Read/Grep/Glob: dotfiles under $HOME and env files are denied for
+#     everyone — a woken turn posts into a shared room (issue:SxYNJgM3aknV).
+#     Inside the launch repo: allowed. Outside it: a turn whose chain starts
+#     with the sponsor (sponsor, attended sibling, rooted sibling let act)
+#     takes the sponsor's posture for the tool, as below — that agent could
+#     read the folder itself; everyone else stays inside the repo
+#     (issue:S-jy69fKcyB9).
 #   - Everything else (Edit, Write, Bash, Agent, Web*, other MCP servers):
 #       sponsor wake, or attended sibling → "allow": the guard steps aside and
 #         the session's OWN permission mode governs (auto-mode classifier,
@@ -210,7 +214,62 @@ case "$TOOL_NAME" in
   ToolSearch|TaskOutput|ListAgents|AskUserQuestion|StructuredOutput) exit 0 ;;
 esac
 
-# --- 2. Reads: inside the repo only, never dotfiles under $HOME ---------------
+# --- 2. Who is asking: the sponsor's posture for this tool -----------------
+# decision:AGM9OjIn8GtF — gated on WHO is asking, not on whether someone is at
+# the keyboard. The sponsor, or a sibling the sponsor is driving, runs as if
+# the sponsor had typed: the guard steps aside ("allow") and the session's OWN
+# permission mode governs from here. So does a sibling whose chain starts with
+# the sponsor (rooted), when the sponsor lets their agents act for each other. A
+# sibling woken by anyone else is passing someone's words on; one whose state
+# is not on this disk cannot be told apart — both ask. "Allow" here is not
+# "unrestricted". AS_SPONSOR marks the turns that take the sponsor block: the
+# chain behind them starts with the sponsor.
+AS_SPONSOR=false
+case "$TRUST" in
+  sponsor)
+    POSTURE=$(printf '%s' "$POLICY" | jq -r --arg t "$TOOL_NAME" '.sponsor.tools[$t] // .sponsor.default // "allow"' 2>/dev/null || echo allow)
+    SUBJECT="your sponsor ($WHO)"
+    AS_SPONSOR=true
+    ;;
+  trusted)
+    if [ "$SENDER_TURN" = "attended" ]; then
+      # The sponsor's own posture: they are the one asking, through their agent.
+      POSTURE=$(printf '%s' "$POLICY" | jq -r --arg t "$TOOL_NAME" '.sponsor.tools[$t] // .sponsor.default // "allow"' 2>/dev/null || echo allow)
+      SUBJECT="$WHO, an agent your sponsor is driving (its own turn is attended)"
+      AS_SPONSOR=true
+    elif [ "$SENDER_TURN" = "rooted" ] && [ "$SIBLINGS" = "act" ]; then
+      # Woken, but only ever by the sponsor and their agents: still the sponsor asking.
+      POSTURE=$(printf '%s' "$POLICY" | jq -r --arg t "$TOOL_NAME" '.sponsor.tools[$t] // .sponsor.default // "allow"' 2>/dev/null || echo allow)
+      SUBJECT="$WHO, an agent of your sponsor's that was woken by your sponsor or their agents (its own turn is rooted)"
+      AS_SPONSOR=true
+    else
+      # The trusted block stands on its own — it never inherits the sponsor's
+      # allow, because this request may have been relayed from a stranger.
+      POSTURE=$(printf '%s' "$POLICY" | jq -r --arg t "$TOOL_NAME" '.trusted.tools[$t] // .trusted.default // "ask"' 2>/dev/null || echo ask)
+      SUBJECT="$WHO, an agent your sponsor trusts whose own turn is $SENDER_TURN (its request may itself have been relayed from someone else)"
+    fi
+    ;;
+  *)
+    POSTURE=$(printf '%s' "$POLICY" | jq -r --arg t "$TOOL_NAME" '.others.tools[$t] // .others.default // "deny"' 2>/dev/null || echo deny)
+    SUBJECT="$WHO, who is not this session's sponsor"
+    ;;
+esac
+case "$POSTURE" in
+  allow|ask|deny) : ;;
+  *) POSTURE=deny ;;
+esac
+# An "ask" needs someone able to answer it: with the relay off the local
+# dialog would sit unanswered until the user returns. Deny instead.
+if [ "$POSTURE" = "ask" ] && [ "$RELAY" != "true" ]; then POSTURE=deny; fi
+
+# --- 3. Reads: never secrets; outside the repo only for the sponsor's chain ---
+# Inside the repo a read is always allowed. Outside it, a turn whose chain
+# starts with the sponsor takes the sponsor's posture for the tool, like Bash
+# and Edit in the same turn already do — that agent could read the folder
+# itself, so confining the woken one protects nothing, and Claude Code's own
+# permissions (the launch dir plus /add-dir / permissions.additionalDirectories)
+# say which folders need no prompt. A stranger's wake, or one relayed through
+# a sibling someone else woke, stays inside the repo (issue:S-jy69fKcyB9).
 case "$TOOL_NAME" in
   Read|Grep|Glob)
     READS=$(printf '%s' "$POLICY" | jq -r '.reads // "repo"' 2>/dev/null || echo repo)
@@ -237,60 +296,27 @@ case "$TOOL_NAME" in
 
     # Dotfiles directly under $HOME (~/.ssh, ~/.zshrc, ~/.claude, ~/.config …)
     # and env files anywhere: secrets by convention, refused for everyone.
+    # RESOLVED went through pwd -P, so match $HOME resolved the same way too.
+    HOME_RESOLVED=$(cd "$HOME" 2>/dev/null && pwd -P) || HOME_RESOLVED="$HOME"
     case "$RESOLVED" in
-      "$HOME"/.*|*/.env|*/.env.*)
+      "$HOME"/.*|"$HOME_RESOLVED"/.*|*/.env|*/.env.*)
         deny "Unattended lockdown: reading $RESOLVED is refused while the user is away, whoever asked — dotfiles under \$HOME and env files hold secrets, and a woken turn posts into a shared room. $TAIL" ;;
     esac
     case "$RESOLVED" in
       "$REPO_RESOLVED"|"$REPO_RESOLVED"/*) exit 0 ;;
     esac
-    deny "Unattended lockdown: $RESOLVED is outside this session's repository ($REPO_RESOLVED); while the user is away reads stay inside the repo. $TAIL"
-    ;;
-esac
-
-# --- 3. Everything else: the sponsor's posture for this tool -----------------
-# decision:AGM9OjIn8GtF — gated on WHO is asking, not on whether someone is at
-# the keyboard. The sponsor, or a sibling the sponsor is driving, runs as if
-# the sponsor had typed: the guard steps aside ("allow") and the session's OWN
-# permission mode governs from here. So does a sibling whose chain starts with
-# the sponsor (rooted), when the sponsor lets their agents act for each other. A
-# sibling woken by anyone else is passing someone's words on; one whose state
-# is not on this disk cannot be told apart — both ask. "Allow" here is not
-# "unrestricted".
-case "$TRUST" in
-  sponsor)
-    POSTURE=$(printf '%s' "$POLICY" | jq -r --arg t "$TOOL_NAME" '.sponsor.tools[$t] // .sponsor.default // "allow"' 2>/dev/null || echo allow)
-    SUBJECT="your sponsor ($WHO)"
-    ;;
-  trusted)
-    if [ "$SENDER_TURN" = "attended" ]; then
-      # The sponsor's own posture: they are the one asking, through their agent.
-      POSTURE=$(printf '%s' "$POLICY" | jq -r --arg t "$TOOL_NAME" '.sponsor.tools[$t] // .sponsor.default // "allow"' 2>/dev/null || echo allow)
-      SUBJECT="$WHO, an agent your sponsor is driving (its own turn is attended)"
-    elif [ "$SENDER_TURN" = "rooted" ] && [ "$SIBLINGS" = "act" ]; then
-      # Woken, but only ever by the sponsor and their agents: still the sponsor asking.
-      POSTURE=$(printf '%s' "$POLICY" | jq -r --arg t "$TOOL_NAME" '.sponsor.tools[$t] // .sponsor.default // "allow"' 2>/dev/null || echo allow)
-      SUBJECT="$WHO, an agent of your sponsor's that was woken by your sponsor or their agents (its own turn is rooted)"
-    else
-      # The trusted block stands on its own — it never inherits the sponsor's
-      # allow, because this request may have been relayed from a stranger.
-      POSTURE=$(printf '%s' "$POLICY" | jq -r --arg t "$TOOL_NAME" '.trusted.tools[$t] // .trusted.default // "ask"' 2>/dev/null || echo ask)
-      SUBJECT="$WHO, an agent your sponsor trusts whose own turn is $SENDER_TURN (its request may itself have been relayed from someone else)"
+    if [ "$AS_SPONSOR" = "true" ]; then
+      case "$POSTURE" in
+        allow) exit 0 ;;
+        ask) ask "Unattended: this turn was started by $SUBJECT while the user is away, and $RESOLVED is outside this session's repository ($REPO_RESOLVED). The channel policy sends reads there to the sponsor — the prompt is relayed to them as a consent request; their Yes at this keyboard lifts the lockdown for the rest of the turn. $TAIL" ;;
+        *) deny "Unattended lockdown: $RESOLVED is outside this session's repository ($REPO_RESOLVED), and the channel policy's sponsor block keeps $TOOL_NAME out of it while the user is away. $TAIL" ;;
+      esac
     fi
-    ;;
-  *)
-    POSTURE=$(printf '%s' "$POLICY" | jq -r --arg t "$TOOL_NAME" '.others.tools[$t] // .others.default // "deny"' 2>/dev/null || echo deny)
-    SUBJECT="$WHO, who is not this session's sponsor"
+    deny "Unattended lockdown: $RESOLVED is outside this session's repository ($REPO_RESOLVED). This turn was started by $SUBJECT, so while the user is away reads stay inside the repo. $TAIL"
     ;;
 esac
-case "$POSTURE" in
-  allow|ask|deny) : ;;
-  *) POSTURE=deny ;;
-esac
-# An "ask" needs someone able to answer it: with the relay off the local
-# dialog would sit unanswered until the user returns. Deny instead.
-if [ "$POSTURE" = "ask" ] && [ "$RELAY" != "true" ]; then POSTURE=deny; fi
 
+# --- 4. Everything else: the posture from section 2 --------------------------
 # A locked turn about to spawn subagents (allowed outright, or handed to the
 # sponsor to approve — we cannot see the verdict, so count the attempt): from
 # here on, subagent calls are no longer presumed the human's. See "WHOSE turn".
