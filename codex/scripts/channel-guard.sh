@@ -47,8 +47,10 @@
 #   here: another host or repo). A sibling's identity is not the risk — on
 #   this host it already shares the user's account and files. Relay is: a
 #   stranger wakes the sibling, the sibling chats to us.
-#   - Gigabuddy collaboration tools (chat, raise, log, answer, …): allowed.
-#     They act in the room under the agent's own server-attributed identity.
+#   - Gigabuddy collaboration tools (chat, raise, log, answer, …) — this
+#     plugin's own server only: allowed. They act in the room under the
+#     agent's own server-attributed identity. Any other MCP server, whatever
+#     its name, takes the posture below like Bash does.
 #   - Read/Grep/Glob: dotfiles under $HOME and env files are denied for
 #     everyone — a woken turn posts into a shared room (issue:SxYNJgM3aknV).
 #     Inside the launch repo: allowed. Outside it: a turn whose chain starts
@@ -208,9 +210,22 @@ ask() {
 TAIL="The lockdown lifts when the user next types in this session, or approves one of these prompts at the keyboard (an approval relayed from the room covers that one call only). Cause: $SDIR/unattended.json (wake from $WHO at $STAMP_TS) together with turn-ended.json in the same dir — a wake arrived and no human prompt has followed. (Set GIGABUDDY_CHANNEL_GUARD=open before launching to disable it; $GB_DIR/channel-policy.json tunes it per tool.)"
 
 # --- 1. Collaboration surface: always allowed -------------------------------
+# Only THIS plugin's own server, named exactly — never "anything with gigabuddy
+# in the name". Every other MCP server falls through to the posture below
+# (others → deny, decision:AGM9OjIn8GtF), however it is named: in Claude Code
+# `mcp__gigabuddy__*` is the repo's internal admin server (gigabuddy-mcp:
+# delete_entity, create_grant, vault …), and a stranger's wake must not reach it.
+# Claude Code names the plugin's server `plugin_gigabuddy_agent`; Codex, which
+# runs this same script (codex-hook.sh sets the cx_ prefix), names it `gigabuddy`.
+case "${GIGABUDDY_SESSION_PREFIX:-cc_}" in
+  cx_) OWN_SERVER_PREFIX=mcp__gigabuddy__ ;;
+  *) OWN_SERVER_PREFIX=mcp__plugin_gigabuddy_agent__ ;;
+esac
+case "$TOOL_NAME" in
+  "$OWN_SERVER_PREFIX"*) exit 0 ;;
+esac
 # StructuredOutput is a subagent's return value, not an action on the machine.
 case "$TOOL_NAME" in
-  mcp__*gigabuddy*__*) exit 0 ;;
   ToolSearch|TaskOutput|ListAgents|AskUserQuestion|StructuredOutput) exit 0 ;;
 esac
 
