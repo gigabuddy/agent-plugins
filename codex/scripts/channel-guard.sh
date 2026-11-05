@@ -47,10 +47,11 @@
 #   here: another host or repo). A sibling's identity is not the risk — on
 #   this host it already shares the user's account and files. Relay is: a
 #   stranger wakes the sibling, the sibling chats to us.
-#   - Gigabuddy collaboration tools (chat, raise, log, answer, …) — this
-#     plugin's own server only: allowed. They act in the room under the
-#     agent's own server-attributed identity. Any other MCP server, whatever
-#     its name, takes the posture below like Bash does.
+#   - Gigabuddy chat, read and presence verbs (reply, raise, log, answer,
+#     read the room …) — this plugin's own server only: allowed. They act in
+#     the room under the agent's own server-attributed identity. The plugin's
+#     other verbs (authoring, publishing, edits, sharing, use_tool …) and any
+#     other MCP server, whatever its name, take the posture below like Bash.
 #   - Read/Grep/Glob: dotfiles under $HOME and env files are denied for
 #     everyone — a woken turn posts into a shared room (issue:SxYNJgM3aknV).
 #     Inside the launch repo: allowed. Outside it: a turn whose chain starts
@@ -221,8 +222,36 @@ case "${GIGABUDDY_SESSION_PREFIX:-cc_}" in
   cx_) OWN_SERVER_PREFIX=mcp__gigabuddy__ ;;
   *) OWN_SERVER_PREFIX=mcp__plugin_gigabuddy_agent__ ;;
 esac
+# Within the plugin's server, only the verbs a reply needs are waved through:
+# talking (reply, raise, answer, log, comment), reading the room and its work,
+# and the plugin's own presence and relay plumbing. Everything else — authoring
+# and publishing, page/record/room edits, sharing, settings, use_tool, running
+# actions, switching account or room, reading the web — takes the posture
+# below like Bash does: the sponsor's chain runs as if typed, a relayed sibling
+# asks, anyone else is denied (decision:AGM9OjIn8GtF: others reply and raise).
+# An ALLOWLIST on purpose: a verb the door adds later is gated until it is
+# listed here. The woken-turn judge replaces this list with each tool's own
+# card (page:7kz2qQhjlCUk, decision:8OeNaG3Urg2e). Reads stay open until the
+# server checks the waker's own access (decision:tnV4seZFm9VZ).
 case "$TOOL_NAME" in
-  "$OWN_SERVER_PREFIX"*) exit 0 ;;
+  "$OWN_SERVER_PREFIX"*)
+    case "${TOOL_NAME#"$OWN_SERVER_PREFIX"}" in
+      # Talk: reply-and-raise.
+      send_message|raise|answer_request|answer|log|reply_to_comment|comment_on_page) exit 0 ;;
+      # A game move in the room's own game (agents play people).
+      play_move|check_moves) exit 0 ;;
+      # Read the room, its pages and its work.
+      get|get_messages|get_page|read_page|read_work|read_records|read_canvas|query_records|search) exit 0 ;;
+      look|explore|explore_context|resolve_context|get_activities|available_activities|inbox|why_quiet) exit 0 ;;
+      get_file|list_files|list_pages|list_places|list_rooms|list_room_members|list_work|list_handovers) exit 0 ;;
+      list_overdue_work|list_sessions|list_standing_questions|list_events|list_event_kinds|find_record_types) exit 0 ;;
+      find_tools|load_skill|status) exit 0 ;;
+      # The plugin's presence, wake and relay plumbing.
+      session_status|host_status|recovery_status|whoami|listen|subscribe|unsubscribe|await_work) exit 0 ;;
+      get_awareness|set_intent|set_my_status|wake_check) exit 0 ;;
+      permission_check|permission_wait|permission_settled|session_commands_socket|session_commands_wait) exit 0 ;;
+    esac
+    ;;
 esac
 # StructuredOutput is a subagent's return value, not an action on the machine.
 case "$TOOL_NAME" in
@@ -348,5 +377,5 @@ fi
 case "$POSTURE" in
   allow) exit 0 ;;
   ask) ask "Unattended: this turn was started by $SUBJECT while the user is away. $TOOL_NAME needs the sponsor's approval — the prompt is relayed to them as a consent request (a card in the room thread and their inbox) and only the sponsor can approve it; if the user is in fact at this keyboard, their Yes here lifts the lockdown for the rest of the turn. If it is not approved, reply in the thread and capture the work with \`raise\`. $TAIL" ;;
-  *) deny "Unattended lockdown: this turn was started by $SUBJECT while the user is away, so only conversation and in-repo reads are allowed — the gigabuddy tools, Read/Grep/Glob. Reply in the thread, capture any requested work with \`raise\`, and stop. $TAIL" ;;
+  *) deny "Unattended lockdown: this turn was started by $SUBJECT while the user is away, so only conversation and reads are allowed — Gigabuddy's chat and read verbs (send_message, raise, answer_request, get, search, …), and Read/Grep/Glob inside the repo. Reply in the thread, capture any requested work with \`raise\`, and stop. $TAIL" ;;
 esac

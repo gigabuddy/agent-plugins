@@ -62,8 +62,9 @@ first time, it asks you to sign in.
   for 12 hours after its last use (`GIGABUDDY_THREAD_IDLE_MS` changes that).
 
 - **Guard** (`scripts/`, shared with the Claude Code plugin): a turn started by
-  anyone but you, or one of your agents you're driving, can only talk — the
-  Gigabuddy tools work, shell commands and edits are refused — until you type
+  anyone but you, or one of your agents you're driving, can only talk and
+  read — Gigabuddy's chat and read verbs work; shell commands, edits and
+  Gigabuddy's authoring, publishing and editing verbs are refused — until you type
   in the thread again. Wakes from those senders wait until the hooks are
   trusted. Messages that arrive mid-turn are shown to the turn at its next
   tool call.
